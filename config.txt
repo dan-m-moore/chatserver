@@ -1,0 +1,6 @@
+{
+  "TelnetPort": 8023,
+  "WebPort": 8080,
+  "WebClientPath": "./webclient/",
+  "LogFilePath": "./build/log.txt"
+}

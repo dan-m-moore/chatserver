@@ -1,0 +1,333 @@
+<!DOCTYPE HTML>
+
+<html>
+    <head>
+        <script type = "text/javascript">
+            let ws
+            let id = 0
+            let rspMap = new Map()
+
+            // Maintain a local copy of the model state for sanity checking
+            let model = {
+                currentUser: "Anonymous",
+                currentChannel: "General",
+                users: [],
+                channels: []
+            }
+
+            if ("WebSocket" in window) {
+                ws = new WebSocket("ws://" + window.location.host + "/ws")
+
+                ws.onopen = function() {
+                    document.getElementById("webSocketStatus").value = "CONNECTED"
+
+                    addEnterHandlers()
+
+                    // Once we've connected, update our current state
+                    updateCurrentUserInfo()
+                    updateUsers()
+
+                    updateCurrentChannelInfo()
+                    updateChannels()
+
+                    updateCurrentChannelHistory()
+                }
+
+                ws.onmessage = function (evt) {
+                    let receivedMsg = JSON.parse(evt.data)
+
+                    // If we're getting a subscription update, parse it
+                    if (receivedMsg.id === -1) {
+                        switch (receivedMsg.result.method) {
+                            case "OnUsersChanged":
+                                updateUsers()
+                                break
+
+                            case "OnUserChanged":
+                                if (receivedMsg.result.username === model.currentUser) {
+                                    updateCurrentUserInfo()
+                                    updateCurrentChannelHistory()
+                                }
+                                break
+
+                            case "OnChannelsChanged":
+                                updateChannels()
+                                break
+
+                            case "OnChannelChanged":
+                                if (receivedMsg.result.channelname === model.currentChannel) {
+                                    updateCurrentChannelInfo()
+                                    updateCurrentChannelHistory()
+                                }
+
+                                break
+
+                            default:
+                                break
+                        }
+                    } else {
+                        let rspFunc = rspMap.get(receivedMsg.id)
+                        if (rspFunc !== undefined) {
+                            rspFunc(receivedMsg.result)
+                            rspMap.delete(receivedMsg.id)
+                        }
+                    }
+                }
+
+                ws.onclose = function() {
+                    document.getElementById("webSocketStatus").value = "NOT CONNECTED"
+                }
+            } else {
+                alert("WebSocket NOT supported by your Browser!")
+            }
+
+            function sendMessage(msgName, msgArgs, rspFunc) {
+                let msg = {
+                    id: id,
+                    method: "chatserver." + msgName,
+                    params: [msgArgs]
+                }
+
+                if (rspFunc !== undefined) {
+                    rspMap.set(id, rspFunc)
+                }
+
+                id++
+                ws.send(JSON.stringify(msg))
+            }
+
+            function addEnterHandlers() {
+                document.getElementById("switchUser").onkeypress = (e) => { if (e.keyCode === 13) { switchUser() } }
+                document.getElementById("createUser").onkeypress = (e) => { if (e.keyCode === 13) { createUser() } }
+                document.getElementById("deleteUser").onkeypress = (e) => { if (e.keyCode === 13) { deleteUser() } }
+                document.getElementById("blockUser").onkeypress = (e) => { if (e.keyCode === 13) { blockUser() } }
+                document.getElementById("unblockUser").onkeypress = (e) => { if (e.keyCode === 13) { unblockUser() } }
+                document.getElementById("switchChannel").onkeypress = (e) => { if (e.keyCode === 13) { switchChannel() } }
+                document.getElementById("createChannel").onkeypress = (e) => { if (e.keyCode === 13) { createChannel() } }
+                document.getElementById("deleteChannel").onkeypress = (e) => { if (e.keyCode === 13) { deleteChannel() } }
+                document.getElementById("postMessage").onkeypress = (e) => { if (e.keyCode === 13) { postMessage() } }
+            }
+
+            function updateUsers() {
+                let usersElement = document.getElementById("users")
+                sendMessage("GetUsers", {
+                },
+                (result) => {
+                    // Update local model
+                    model.users = []
+                    for (let i = 0; i < result.Users.length; i++) {
+                        model.users[i] = result.Users[i]
+                    }
+
+                    // Update the text box
+                    let formattedUsers = ""
+                    for (let i = 0; i < model.users.length; i++) {
+                        let username = model.users[i]
+                        if (username === model.currentUser) {
+                            formattedUsers += "--> " + username + " <--\n"
+                        } else {
+                            formattedUsers += username + "\n"
+                        }
+                    }
+                    usersElement.value = formattedUsers
+
+                    // Handle case where our current user has gone away
+                    if (!model.users.includes(model.currentUser)) {
+                        switchToDefaultChannel()
+                        switchToDefaultUser()
+                    }
+                })
+            }
+
+            function updateCurrentUserInfo() {
+                let userInfoElement = document.getElementById("userInfo")
+                sendMessage("GetUserInfo", {
+                    Username: model.currentUser
+                },
+                (result) => {
+                    let formattedUserInfo = "User: " + result.User.Name + "\n"
+                    formattedUserInfo += "BlockedUsers: \n"
+                    for (let i = 0; i < result.User.BlockedUsers.length; i++) {
+                        formattedUserInfo += "    " + result.User.BlockedUsers[i] + "\n"
+                    }
+                    userInfoElement.value = formattedUserInfo
+                })
+            }
+
+            function updateChannels() {
+                let channelsElement = document.getElementById("channels")
+                sendMessage("GetChannels", {
+                },
+                (result) => {
+                    // Update local model
+                    model.channels = []
+                    for (let i = 0; i < result.Channels.length; i++) {
+                        model.channels[i] = result.Channels[i]
+                    }
+
+                    // Update the text box
+                    let formattedChannels = ""
+                    for (let i = 0; i < model.channels.length; i++) {
+                        let channelname = model.channels[i]
+                        if (channelname === model.currentChannel) {
+                            formattedChannels += "--> " + channelname + " <--\n"
+                        } else {
+                            formattedChannels += channelname + "\n"
+                        }
+                    }
+                    channelsElement.value = formattedChannels
+
+                    // Handle case where our current channel has gone away
+                    if (!model.channels.includes(model.currentChannel)) {
+                        switchToDefaultChannel()
+                    }
+                })
+            }
+
+            function updateCurrentChannelInfo() {
+                let channelInfoElement = document.getElementById("channelInfo")
+                sendMessage("GetChannelInfo", {
+                    Channelname: model.currentChannel
+                },
+                (result) => {
+                    let formattedChannelInfo = "Channel: " + result.Channel.Name + "\n"
+                    formattedChannelInfo += "Messages: " + result.Channel.NumMessages + "\n"
+                    channelInfoElement.value = formattedChannelInfo
+                })
+            }
+
+            function updateCurrentChannelHistory() {
+                let channelElement = document.getElementById("channel")
+                sendMessage("GetChannelHistory", {
+                    Channelname: model.currentChannel,
+                    Username: model.currentUser,
+                    NumMessages: -1,
+                },
+                (result) => {
+                    let formattedMessages = ""
+                    for (let i = 0; i < result.Messages.length; i++) {
+                        formattedMessages += "[" + result.Messages[i].Timestamp + " - " + result.Messages[i].Username + "] " + result.Messages[i].Text + "\n"
+                    }
+                    channelElement.value = formattedMessages
+                    channelElement.scrollTop = channelElement.scrollHeight
+                })
+            }
+
+            function switchToDefaultUser() {
+                model.currentUser = "Anonymous"
+                updateUsers()
+                updateCurrentUserInfo()
+                updateCurrentChannelHistory()
+            }
+
+            function switchToDefaultChannel() {
+                model.currentChannel = "General"
+                updateChannels()
+                updateCurrentChannelInfo()
+                updateCurrentChannelHistory()
+            }
+
+            function switchUser() {
+                let switchUserElement = document.getElementById("switchUser")
+                let requestedUser = switchUserElement.value
+                if (model.users.includes(requestedUser)) {
+                    model.currentUser = requestedUser
+                    updateUsers()
+                    updateCurrentUserInfo()
+                    updateCurrentChannelHistory()
+                }
+                switchUserElement.value = ""
+            }
+
+            function createUser() {
+                let createUserElement = document.getElementById("createUser")
+                sendMessage("CreateUser", {
+                    Username: createUserElement.value
+                }, undefined)
+                createUserElement.value = ""
+            }
+
+            function deleteUser() {
+                let deleteUserElement = document.getElementById("deleteUser")
+                sendMessage("DeleteUser", {
+                    Username: deleteUserElement.value
+                }, undefined)
+                deleteUserElement.value = ""
+            }
+
+            function blockUser() {
+                let blockUserElement = document.getElementById("blockUser")
+                sendMessage("BlockUser", {
+                    Username: model.currentUser,
+                    UsernameToBlock: blockUserElement.value
+                }, undefined)
+                blockUserElement.value = ""
+            }
+
+            function unblockUser() {
+                let unblockUserElement = document.getElementById("unblockUser")
+                sendMessage("UnblockUser", {
+                    Username: model.currentUser,
+                    UsernameToUnblock: unblockUserElement.value
+                }, undefined)
+                unblockUserElement.value = ""
+            }
+
+            function switchChannel() {
+                let switchChannelElement = document.getElementById("switchChannel")
+                let requestedChannel = switchChannelElement.value
+                if (model.channels.includes(requestedChannel)) {
+                    model.currentChannel = requestedChannel
+                    updateChannels()
+                    updateCurrentChannelInfo()
+                    updateCurrentChannelHistory()
+                }
+                switchChannelElement.value = ""
+            }
+
+            function createChannel() {
+                let createChannelElement = document.getElementById("createChannel")
+                sendMessage("CreateChannel", {
+                    Channelname: createChannelElement.value
+                }, undefined)
+                createChannelElement.value = ""
+            }
+
+            function deleteChannel() {
+                let deleteChannelElement = document.getElementById("deleteChannel")
+                sendMessage("DeleteChannel", {
+                    Channelname: deleteChannelElement.value
+                }, undefined)
+                deleteChannelElement.value = ""
+            }
+
+            function postMessage() {
+                let postMessageElement = document.getElementById("postMessage")
+                sendMessage("PostMessage", {
+                    Channelname: model.currentChannel,
+                    Username: model.currentUser,
+                    Text: postMessageElement.value
+                })
+                postMessageElement.value = ""
+            }
+        </script>
+    </head>
+
+    <body>
+        <input id="webSocketStatus" readonly type="text" value="NOT CONNECTED"><br><br>
+        <textarea id="users" readonly rows="16" cols="32"></textarea>
+        <textarea id="userInfo" readonly rows="16" cols="32"></textarea><br>
+        <input id="switchUser" type="text" value=""><button type="button" onclick="switchUser()">Switch User</button><br>
+        <input id="createUser" type="text" value=""><button type="button" onclick="createUser()">Create User</button><br>
+        <input id="deleteUser" type="text" value=""><button type="button" onclick="deleteUser()">Delete User</button><br>
+        <input id="blockUser" type="text" value=""><button type="button" onclick="blockUser()">Block User</button><br>
+        <input id="unblockUser" type="text" value=""><button type="button" onclick="unblockUser()">Unblock User</button><br><br>
+        <textarea id="channels" readonly rows="16" cols="32"></textarea>
+        <textarea id="channelInfo" readonly rows="16" cols="32"></textarea><br>
+        <input id="switchChannel" type="text" value=""><button type="button" onclick="switchChannel()">Switch Channel</button><br>
+        <input id="createChannel" type="text" value=""><button type="button" onclick="createChannel()">Create Channel</button><br>
+        <input id="deleteChannel" type="text" value=""><button type="button" onclick="deleteChannel()">Delete Channel</button><br><br>
+        <textarea id="channel" readonly rows="16" cols="68"></textarea><br>
+        <input id="postMessage" type="text" value=""><button type="button" onclick="postMessage()">Post Message</button><br>
+    </body>
+</html>
